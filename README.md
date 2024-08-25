@@ -1,6 +1,6 @@
 README
 Overview
-This script involves various functionalities including configuring GPU memory for TensorFlow, creating and handling weight matrices, simulating quantum circuits using Cirq, managing file operations, building and tuning machine learning models, and visualizing data using Matplotlib.
+This script involves various functionalities including configuring GPU memory for TensorFlow, creating and handling weight matrices, simulating quantum circuits using Cirq, managing file operations, building and tuning machine learning models, and visualizing data using Matplotlib in mining operation, collecting data in .txt and create his quantum circuit in his execution folder, i search constantly a way to up performances on each function and in the code structure. Here a Summary of what he do and what he need.
 
 Key Components
 1. GPU Memory Configuration
