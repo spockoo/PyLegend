@@ -1,0 +1,622 @@
+import os
+import time
+import random
+import string
+import gc
+import pickle
+import numpy as np
+import cirq
+import tensorflow as tf
+from subprocess import Popen
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import make_scorer, mean_squared_error, r2_score
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.backend import clear_session
+import keras_tuner as kt
+from matplotlib import pyplot as plt
+from matplotlib.animation import FuncAnimation
+def configure_gpu_memory(log_file_path):
+    """
+    Configure la mémoire GPU pour utiliser la croissance dynamique de la mémoire.
+    
+    Args:
+        log_file_path (str): Chemin du fichier journal pour les logs.
+    """
+    try:
+        physical_devices = tf.config.list_physical_devices('GPU')
+        if physical_devices:
+            tf.config.experimental.set_memory_growth(physical_devices[0], True)
+            log_data("GPU configuré pour utiliser la croissance de mémoire dynamique.", log_file_path)
+        else:
+            log_data("Aucun GPU trouvé.", log_file_path)
+    except Exception as e:
+        log_data(f"Erreur lors de la configuration du GPU: {e}", log_file_path)
+import numpy as np
+# Définir la matrice de poids
+def get_weight_matrix():
+    return np.array([
+        [1.         , 0.9       , 0.81      , 0.729     , 0.6561    , 0.59049   , 0.531441  , 0.4782969 , 0.43046721, 0.38742049],
+        [0.         , 1.        , 0.9       , 0.81      , 0.729     , 0.6561    , 0.59049   , 0.531441  , 0.4782969 , 0.43046721],
+        [0.         , 0.        , 1.        , 0.9       , 0.81      , 0.729     , 0.6561    , 0.59049   , 0.531441  , 0.4782969 ],
+        [0.         , 0.        , 0.        , 1.        , 0.9       , 0.81      , 0.729     , 0.6561    , 0.59049   , 0.531441  ],
+        [0.         , 0.        , 0.        , 0.        , 1.        , 0.9       , 0.81      , 0.729     , 0.6561    , 0.59049   ],
+        [0.         , 0.        , 0.        , 0.        , 0.        , 1.        , 0.9       , 0.81      , 0.729     , 0.6561    ],
+        [0.         , 0.        , 0.        , 0.        , 0.        , 0.        , 1.        , 0.9       , 0.81      , 0.729     ],
+        [0.         , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 1.        , 0.9       , 0.81      ],
+        [0.         , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 1.        , 0.9       ],
+        [0.         , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 1.        ]
+    ])
+# Définir la matrice de poids pour les parts en fonction du temps
+def create_weight_matrix(num_shares, decay_rate=0.1):
+
+    weights = np.zeros((num_shares, num_shares))
+    for i in range(num_shares):
+        weights[i, i:] = decay_rate ** np.arange(num_shares - i)
+    return weights
+# Calculer les récompenses basées sur la matrice des poids
+def calculate_rewards(shares, weight_matrix):
+    """
+    Calcule les récompenses pour les mineurs basées sur leurs parts et la matrice de poids.
+    
+    Args:
+        shares (numpy.ndarray): Matrice des parts où chaque ligne est un mineur et chaque colonne est une part spécifique.
+        weight_matrix (numpy.ndarray): Matrice des poids.
+        
+    Returns:
+        numpy.ndarray: Récompenses pour chaque mineur.
+    """
+    weighted_shares = np.dot(shares, weight_matrix)
+    total_rewards = weighted_shares.sum(axis=1)
+    return total_rewards
+def simulate_quantum_circuit_optimized(num_qubits, depth, repetitions=1000):
+    """
+    Simule un circuit quantique optimisé avec le nombre de qubits spécifié et la profondeur du circuit.
+    
+    Args:
+        num_qubits (int): Nombre de qubits dans le circuit.
+        depth (int): Profondeur du circuit.
+        repetitions (int): Nombre de répétitions pour l'expérience de simulation (défaut: 1000).
+
+    Returns:
+        dict: Résultats de la simulation sous forme de dictionnaire.
+    """
+    # Création du circuit quantique
+    qubits = [cirq.GridQubit(0, i) for i in range(num_qubits)]
+    circuit = cirq.Circuit()
+
+    # Ajout de portes au circuit
+    for _ in range(depth):
+        circuit.append(cirq.H(q) for q in qubits)  # Ajout d'une porte Hadamard
+        circuit.append(cirq.CNOT(q1, q2) for q1 in qubits for q2 in qubits if q1 != q2)  # Ajout de portes CNOT
+
+    # Optimisation du circuit
+    optimized_circuit = cirq.optimize_for_target_gateset(circuit, target_gateset={cirq.CNOT, cirq.X})
+
+    # Simulation
+    simulator = cirq.Simulator()
+    result = simulator.run(optimized_circuit, repetitions=repetitions)
+
+    return result.histogram(key='result')
+# Configuration des chemins et paramètres
+MINER_PATH = "C:/Chemin/vers/le/dossier de l'exécutable du mineur/NBminer_Win"
+MINER_EXECUTABLE = "nbminer.exe"
+POOL_URL = "POOL"
+USER = "USER"
+PASSWORD = "x"
+
+INTERCEPT_CONSTANT = 0.60
+BATCH_SIZE = 32  # Taille des lots pour écrire sur disque (ajustée pour des performances optimales)
+
+MODEL_FILE_PATH = "model.keras"
+CIRCUIT_FILE_PATH = "quantum_circuit.pkl"
+
+# Fréquence initiale pour la simulation quantique
+quantum_circuit_repetitions = 10
+initial_qubits = 2
+
+# Initialiser les variables globales
+process = None
+X_data = None
+y_data = None
+batch_X = None
+batch_y = None
+rmse_data = []
+intercept_data = []
+r2_data = []
+current_model = None
+
+def generate_unique_filename(prefix="file", extension=".log"):
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    random_id = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+    filename = f"{prefix}_{timestamp}_{random_id}{extension}"
+    return os.path.join(os.getcwd(), filename)
+
+def log_data(data, log_file_path):
+    try:
+        with open(log_file_path, "a") as log_file:
+            log_file.write(data + "\n")
+    except Exception as e:
+        print(f"Erreur lors de l'enregistrement des données: {e}")
+
+def save_file(obj, file_path, log_file_path, mode='wb'):
+    try:
+        with open(file_path, mode) as file:
+            pickle.dump(obj, file)
+        log_data(f"Fichier sauvegardé à {file_path}", log_file_path)
+    except Exception as e:
+        log_data(f"Erreur lors de la sauvegarde du fichier: {e}", log_file_path)
+
+def load_file(file_path, log_file_path, mode='rb'):
+    try:
+        if os.path.isfile(file_path):
+            with open(file_path, mode) as file:
+                obj = pickle.load(file)
+            log_data(f"Fichier chargé depuis {file_path}", log_file_path)
+            return obj
+        else:
+            log_data(f"Le fichier n'existe pas à {file_path}", log_file_path)
+            return None
+    except Exception as e:
+        log_data(f"Erreur lors du chargement du fichier: {e}", log_file_path)
+        return None
+
+def build_model(hp, input_shape):
+    model = Sequential([
+        Dense(hp.Int('units', min_value=64, max_value=128, step=32), activation='relu', input_shape=(input_shape,)),
+        Dense(32, activation='relu'),
+        Dense(1)
+    ])
+    model.compile(optimizer='adam', loss='mean_squared_error', metrics=['mae'])
+    return model
+
+def hyperparameter_tuning(X, y):
+    tuner = kt.Hyperband(
+        lambda hp: build_model(hp, X.shape[1]),
+        objective='val_loss',
+        max_epochs=3,  # Réduit le nombre d'époques pour le tuning rapide
+        directory='tuner',
+        project_name='hyperparameter_tuning'
+    )
+
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+    tuner.search(X_train, y_train, epochs=3, validation_data=(X_val, y_val))  # Réduit les époques pour le tuning rapide
+
+    best_model = tuner.get_best_models(num_models=1)[0]
+    best_params = tuner.get_best_hyperparameters(num_trials=1)[0].values
+
+    return best_model, best_params
+
+def retry_on_failure(func, max_attempts=3, *args, **kwargs):
+    attempts = 0
+    while attempts < max_attempts:
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            attempts += 1
+            log_data(f"Tentative {attempts}/{max_attempts} échouée pour {func.__name__}: {e}", kwargs.get('log_file_path', ''))
+            if attempts == max_attempts:
+                log_data(f"Échec permanent de {func.__name__} après {max_attempts} tentatives.", kwargs.get('log_file_path', ''))
+                raise e
+            time.sleep(1)  # Réduire l'attente avant de réessayer
+
+def create_dataset(X, y, batch_size=64):
+    dataset = tf.data.Dataset.from_tensor_slices((X, y))
+    dataset = dataset.shuffle(buffer_size=len(X))
+    dataset = dataset.batch(batch_size)
+    dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+    return dataset
+
+def train_tf_model(X, y, log_file_path, existing_model=None, intercept_adjustment=7, params=None):
+    if params is None:
+        params = {}
+
+    # Utilisez des valeurs par défaut si les clés sont absentes
+    epochs = params.get('epochs', 7)  # Valeur par défaut : 10
+    batch_size = params.get('batch_size', 100000)  # Valeur par défaut : 32
+
+    # Affichez les paramètres pour le débogage
+    print(f"epochs: {epochs}, batch_size: {batch_size}")
+
+    # Assurez-vous que le modèle est défini
+    input_shape = X.shape[1]  # Déterminez la forme d'entrée basée sur X
+    model = existing_model if existing_model else create_model(input_shape)
+
+    # Ajustez le modèle si nécessaire avec l'intercept_adjustment
+    if intercept_adjustment is not None:
+        # Vérifiez si une couche Lambda avec un nom similaire existe déjà
+        if 'intercept_adjustment_layer' not in [layer.name for layer in model.layers]:
+            # Ajoutez une couche Lambda avec un nom unique
+            model.add(tf.keras.layers.Lambda(lambda x: x + intercept_adjustment, name='intercept_adjustment_layer'))
+
+    # Entraînez le modèle
+    model.fit(X, y, epochs=epochs, batch_size=batch_size)
+
+    # Évaluez le modèle
+    predictions = model.predict(X)
+    rmse = np.sqrt(mean_squared_error(y, predictions))
+    r2 = r2_score(y, predictions)
+
+    # Log des résultats
+    with open(log_file_path, 'a') as log_file:
+        log_file.write(f"Model trained with epochs={epochs}, batch_size={batch_size}\n")
+        log_file.write(f"RMSE: {rmse}\n")
+        log_file.write(f"R^2: {r2}\n")
+
+    return model, rmse, r2
+def clean_data(X, y):
+    """Nettoie les données pour s'assurer qu'elles sont numériques."""
+    try:
+        X = pd.DataFrame(X).apply(pd.to_numeric, errors='coerce').fillna(0).values
+        y = pd.Series(y).apply(pd.to_numeric, errors='coerce').fillna(0).values
+        return X, y
+    except Exception as e:
+        raise ValueError(f"Erreur lors du nettoyage des données: {e}")
+def fine_tune_model(model, X, y, log_file_path, intercept_adjustment=0.0):
+    try:
+        # Ajustement de l'intercept, si nécessaire
+        if intercept_adjustment != 0.0:
+            # Exemple d'ajustement de l'intercept
+            model.add(Dense(1, use_bias=True))
+            model.layers[-1].set_weights([model.layers[-1].get_weights()[0], np.array([intercept_adjustment])])
+        
+        model.fit(X, y, epochs=10)  # Ajustez les paramètres de formation selon vos besoins
+        predictions = model.predict(X)
+        rmse = np.sqrt(mean_squared_error(y, predictions))
+        r2 = r2_score(y, predictions)
+
+        log_data(f"Modèle affiné avec RMSE: {rmse} et R^2: {r2}", log_file_path)
+        return model, rmse, r2
+    except Exception as e:
+        log_data(f"Erreur lors de l'affinage du modèle: {e}", log_file_path)
+        return None, None, None
+
+def cross_val_score_with_cv(X, y, model=None, scoring=None, cv=5):
+    """
+    Évalue un modèle en utilisant la validation croisée et une métrique de scoring personnalisée.
+    
+    Paramètres :
+    - X : np.ndarray ou pd.DataFrame
+        Matrice des caractéristiques d'entrée.
+    - y : np.ndarray ou pd.Series
+        Vecteur des valeurs cibles.
+    - model : sklearn.base.BaseEstimator, optionnel (par défaut LinearRegression())
+        Modèle à évaluer. Si aucun modèle n'est fourni, `LinearRegression` est utilisé.
+    - scoring : fonction ou str, optionnel (par défaut mean_squared_error)
+        Métrique de scoring à utiliser pour évaluer le modèle. Si aucune métrique n'est fournie, 
+        l'erreur quadratique moyenne (MSE) est utilisée.
+    - cv : int, optionnel (par défaut 5)
+        Nombre de splits dans la validation croisée.
+    
+    Retourne :
+    - float
+        Erreur moyenne de validation croisée du modèle.
+    """
+    # Vérifier que X et y sont des tableaux numpy
+    if not isinstance(X, (np.ndarray, pd.DataFrame)):
+        raise TypeError("X doit être un tableau numpy ou un DataFrame pandas.")
+    if not isinstance(y, (np.ndarray, pd.Series)):
+        raise TypeError("y doit être un tableau numpy ou une Série pandas.")
+    
+    # Utiliser un modèle par défaut si aucun modèle n'est fourni
+    if model is None:
+        model = LinearRegression()
+    
+    # Utiliser une métrique de scoring par défaut si aucune métrique n'est fournie
+    if scoring is None:
+        scoring = make_scorer(mean_squared_error, greater_is_better=False)
+    
+    # Vérifier que le modèle est un estimatrice sklearn
+    if not hasattr(model, 'fit') or not hasattr(model, 'predict'):
+        raise TypeError("Le modèle doit être une instance d'un estimatrice sklearn.")
+    
+    # Exécuter la validation croisée
+    try:
+        scores = cross_val_score(model, X, y, cv=cv, scoring=scoring)
+        return -np.mean(scores)  # Retourner la moyenne des scores (l'erreur quadratique moyenne)
+    except Exception as e:
+        raise RuntimeError(f"Une erreur est survenue lors de la validation croisée : {e}")
+
+def start_mining(log_file_path):
+    global process
+    miner_executable = os.path.join(MINER_PATH, MINER_EXECUTABLE)
+    if not os.path.isfile(miner_executable):
+        log_data(f"Erreur: Exécutable '{miner_executable}' non trouvé.", log_file_path)
+        return
+    command = [
+        miner_executable,
+        "-a", "kawpow",
+        "-o", POOL_URL,
+        "-u", USER,
+        "-p", PASSWORD
+    ]
+    log_data(f"Exécution de la commande: {command}", log_file_path)
+    try:
+        process = Popen(command, cwd=MINER_PATH)
+    except Exception as e:
+        log_data(f"Erreur lors du démarrage du processus: {e}", log_file_path)
+
+def stop_mining(log_file_path):
+    global process
+    if process:
+        try:
+            process.terminate()
+            process.wait()
+        except Exception as e:
+            log_data(f"Erreur lors de l'arrêt du processus: {e}", log_file_path)
+        finally:
+            process = None
+def create_model(input_shape):
+    """Crée un modèle Keras avec une forme d'entrée spécifiée."""
+    model = tf.keras.Sequential([
+        tf.keras.layers.Dense(64, activation='relu', input_shape=(input_shape,)),
+        tf.keras.layers.Dense(1)
+    ])
+    model.compile(optimizer='adam', loss='mean_squared_error')
+    return model
+def create_memmap_array(filename, shape, dtype):
+    if not os.path.exists(filename):
+        # Crée un fichier vide avec la forme et le type de données spécifiés
+        np.memmap(filename, dtype=dtype, mode='w+', shape=shape)
+    return np.memmap(filename, dtype=dtype, mode='r+', shape=shape)
+
+def collect_data_from_miner(log_file_path, X, y):
+    global process
+
+    if process is None:
+        log_data("Le processus de minage n'est pas en cours.", log_file_path)
+        return
+
+    try:
+        # Lire les sorties du processus de minage en continu
+        while True:
+            # Lire une ligne de la sortie standard
+            output = process.stdout.readline()
+            if not output:
+                break
+            output = output.decode('utf-8').strip()
+            log_data(f"Sortie du processus: {output}", log_file_path)
+
+            # Traitement des lignes pour extraire les données pertinentes
+            if "Hashrate" in output:
+                hashrate = extract_hashrate(output)
+                # Ajouter les données extraites aux ensembles de données
+                if X.shape[0] < X.shape[0]:  # Vérifie la taille d'échantillon
+                    X[len(X)] = [hashrate]
+                    y[len(y)] = hashrate  # Exemple: utiliser le hashrate comme valeur cible
+    except Exception as e:
+        log_data(f"Erreur lors de la collecte des données du mineur: {e}", log_file_path)
+
+def extract_hashrate(line):
+    try:
+        # Exemple d'extraction d'un hashrate à partir d'une ligne de sortie
+        # Supposons que la ligne contient "Hashrate: 12345 H/s"
+        parts = line.split()
+        if "Hashrate:" in parts:
+            hashrate = float(parts[parts.index("Hashrate:") + 1].replace('H/s', ''))
+            return hashrate
+        return 0.0
+    except Exception as e:
+        log_data(f"Erreur lors de l'extraction du hashrate: {e}", log_file_path)
+        return 0.0
+
+def calculate_gradient_and_intercept(X, y):
+    if X.size == 0 or y.size == 0:
+        return None, None
+    if X.shape[0] < 2 or X.shape[1] < 2:
+        return None, None
+    if np.linalg.matrix_rank(X) < X.shape[1]:
+        return None, None
+    model = LinearRegression().fit(X, y)
+    intercept = model.intercept_
+    gradient = model.coef_
+    return intercept, gradient
+
+def simulate_quantum_circuit(log_file_path, repetitions, qubits_count):
+    try:
+        qubits = cirq.LineQubit.range(qubits_count)
+        circuit = cirq.Circuit([
+            cirq.H(qubits[0]),
+            cirq.CNOT(qubits[0], qubits[1]),
+            cirq.measure(*qubits, key='result')
+        ])
+
+        save_file(circuit, CIRCUIT_FILE_PATH, log_file_path, mode='wb')
+
+        simulator = cirq.Simulator()
+        result = simulator.run(circuit, repetitions=repetitions)
+
+        results_matrix = result.measurements['result'].reshape((repetitions, qubits_count))
+
+        log_data(f"Résultats de la simulation quantique (répétitions={repetitions}, qubits={qubits_count}): {result}", log_file_path)
+        log_data(f"Matrice des résultats: {results_matrix}", log_file_path)
+
+    except Exception as e:
+        log_data(f"Erreur lors de la simulation quantique: {e}", log_file_path)
+
+def simulate_quantum_circuit_for_plot(repetitions, qubits_count):
+    qubits = cirq.LineQubit.range(qubits_count)
+    circuit = cirq.Circuit([
+        cirq.H(qubits[0]),
+        cirq.CNOT(qubits[0], qubits[1]),
+        cirq.measure(*qubits, key='result')
+    ])
+
+    simulator = cirq.Simulator()
+    result = simulator.run(circuit, repetitions=repetitions)
+    return result.measurements['result'].flatten()
+
+def apply_gaussian_discrimination(data):
+    mean = np.mean(data)
+    std_dev = np.std(data)
+    return np.where((data > mean - 0.5 * std_dev) & (data < mean + 0.5 * std_dev), 1, 0)
+
+def update_graph(frame, log_file_path, fig, ax1, ax2, ax3, ax4, ax5, ax6):
+    global X_data, y_data, rmse_data, intercept_data, r2_data, current_model, quantum_circuit_repetitions, initial_qubits
+
+    collect_data_from_miner(log_file_path, X_data, y_data)
+
+    qubits_count = initial_qubits + (frame // 10)
+    
+    simulate_quantum_circuit(log_file_path, quantum_circuit_repetitions, qubits_count)
+    
+    quantum_circuit_repetitions += 10
+
+    if X_data.shape[0] < 2 or y_data.shape[0] < 2:
+        return
+
+    if X_data.size == 0 or y_data.size == 0 or X_data.shape[0] != y_data.shape[0] or X_data.shape[0] < 2:
+        log_data("Erreur: Dimensions des données inconsistantes ou échantillons insuffisants.", log_file_path)
+        return
+
+    if X_data.shape[0] >= 10:
+        model, rmse, r2 = retry_on_failure(train_tf_model, 3, X_data, y_data, log_file_path, existing_model=current_model)
+        if model:
+            current_model = model
+            save_file(model, MODEL_FILE_PATH, log_file_path, mode='wb')
+            rmse_data.append(rmse)
+            r2_data.append(r2)
+            intercept, gradient = calculate_gradient_and_intercept(X_data, y_data)
+            if intercept is not None and gradient is not None:
+                intercept_data.append(intercept)
+
+            ax1.clear()
+            ax1.plot(rmse_data, label='RMSE')
+            ax1.set_title('Erreur Quadratique Moyenne (RMSE)')
+            ax1.set_xlabel('Itération')
+            ax1.set_ylabel('RMSE')
+            ax1.legend()
+
+            ax2.clear()
+            ax2.plot(intercept_data, label='Intercept')
+            ax2.set_title('Intercept du Modèle')
+            ax2.set_xlabel('Itération')
+            ax2.set_ylabel('Intercept')
+            ax2.legend()
+
+            ax3.clear()
+            ax3.plot(np.array(intercept_data) + INTERCEPT_CONSTANT, label='Intercept Ajusté')
+            ax3.set_title('Intercept Ajusté')
+            ax3.set_xlabel('Itération')
+            ax3.set_ylabel('Intercept Ajusté')
+            ax3.legend()
+
+            # Simulation quantique et application de la discrimination gaussienne
+            qubit_results = simulate_quantum_circuit_for_plot(quantum_circuit_repetitions, initial_qubits + (frame // 10))
+            gaussian_results = apply_gaussian_discrimination(qubit_results)
+            
+            # Création de l'histogramme équilibré de 0.0 à 1.0
+            ax4.clear()
+            ax4.hist(gaussian_results, bins=np.arange(0.0, 1.1, 1.0), range=(0.0, 1.0), label='Résultats Discriminés de la Simulation Quantique')
+            ax4.set_title('Histogramme des Résultats Discriminés de la Simulation Quantique')
+            ax4.set_xlabel('Résultat')
+            ax4.set_ylabel('Fréquence')
+            ax4.legend()
+
+            if X_data.shape[0] > 0:
+                samples_idx = np.arange(len(y_data))
+                ax5.clear()
+                ax5.plot(samples_idx, y_data, 'b.', label='Valeur Réelle')
+                ax5.set_title('Échantillons a/b vs Valeur Réelle')
+                ax5.set_xlabel('Index d\'échantillon')
+                ax5.set_ylabel('Valeur Réelle')
+                ax5.legend()
+
+            ax6.clear()
+            ax6.plot(r2_data, label='R^2')
+            ax6.set_title('Coefficient de Détermination (R^2)')
+            ax6.set_xlabel('Itération')
+            ax6.set_ylabel('R^2')
+            ax6.legend()
+
+            plt.tight_layout()
+            gc.collect()
+
+def simulate_quantum_circuit_optimized(num_qubits, depth, repetitions=1000):
+    # Crée un circuit quantique de profondeur `depth` avec `num_qubits` qubits
+    qubits = cirq.LineQubit.range(num_qubits)
+    circuit = cirq.Circuit()
+
+    for i in range(depth):
+        # Ajoute une porte Hadamard
+        circuit.append(cirq.H(qubits[i % num_qubits]))
+        if i > 0:
+            # Ajoute une porte CNOT
+            circuit.append(cirq.CNOT(qubits[i % num_qubits], qubits[(i + 1) % num_qubits]))
+
+    # Ajoute des mesures à tous les qubits
+    circuit.append(cirq.measure(*qubits, key='result'))
+
+    # Simplification et optimisation du circuit
+    circuit = cirq.Circuit(cirq.expand_composite(circuit))  # Expande les opérations composites en opérations de base
+    circuit = cirq.Circuit(cirq.drop_empty_moments(circuit))  # Supprime les moments vides
+
+    # Simulateur
+    simulator = cirq.Simulator()
+    result = simulator.run(circuit, repetitions=repetitions)
+
+    # Collecte des résultats
+    counts = result.histogram(key='result')
+    return counts
+
+# Fonction principale
+def main():
+    global X_data, y_data, batch_X, batch_y, rmse_data, intercept_data, r2_data, current_model
+    global process, quantum_circuit_repetitions, initial_qubits
+
+    log_file_path = generate_unique_filename()
+    log_data(f"Début de l'exécution du script à {time.strftime('%Y-%m-%d %H:%M:%S')}", log_file_path)
+
+    # Configuration de la mémoire GPU
+    configure_gpu_memory(log_file_path)
+
+    # Initialisation des données et du modèle
+    X_data = create_memmap_array("X_data.dat", (1000, 10), dtype='float32')
+    y_data = create_memmap_array("y_data.dat", (1000,), dtype='float32')
+    batch_X = np.zeros((BATCH_SIZE, 10), dtype='float32')
+    batch_y = np.zeros(BATCH_SIZE, dtype='float32')
+    rmse_data = []
+    intercept_data = []
+    r2_data = []
+    current_model = load_file(MODEL_FILE_PATH, log_file_path, mode='rb')
+
+    # Simulation du circuit quantique
+    num_qubits = 3
+    depth = 5
+    quantum_results = simulate_quantum_circuit_optimized(num_qubits, depth)
+    print("Quantum Circuit Simulation Results:", quantum_results)
+
+    start_mining(log_file_path)
+    
+    intercept_value = 0.65  # Ajustez cette valeur selon vos besoins
+    model, rmse, r2 = train_tf_model(X_data, y_data, log_file_path, existing_model=current_model, intercept_adjustment=intercept_value)
+    
+    fig, (ax1, ax2, ax3, ax4, ax5, ax6) = plt.subplots(6, 1, figsize=(10, 18))
+    ani = FuncAnimation(fig, update_graph, fargs=(log_file_path, fig, ax1, ax2, ax3, ax4, ax5, ax6), interval=1000, cache_frame_data=False) 
+
+    try:
+        plt.show()
+    except KeyboardInterrupt:
+        log_data("Interruption de l'utilisateur détectée.", log_file_path)
+    finally:
+        stop_mining(log_file_path)
+        log_data(f"Fin de l'exécution du script à {time.strftime('%Y-%m-%d %H:%M:%S')}", log_file_path)
+
+if __name__ == "__main__":
+    main()
+    
+# Copyright 2024  Tomy Verreault
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
