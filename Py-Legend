@@ -58,7 +58,7 @@ def create_weight_matrix(num_shares, decay_rate=0.1):
     return weights
 # Calculer les récompenses basées sur la matrice des poids
 def calculate_rewards(shares, weight_matrix):
-    """
+    
     Calcule les récompenses pour les mineurs basées sur leurs parts et la matrice de poids.
     
     Args:
