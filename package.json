@@ -1,0 +1,25 @@
+{
+    "name": "mon-projet-python",
+    "version": "1.0.0",
+    "description": "Un projet Python g\u00e9n\u00e9r\u00e9 automatiquement",
+    "main": "script.py",
+    "scripts": {
+        "start": "python script.py"
+    },
+    "author": "Votre Nom",
+    "license": "MIT",
+    "dependencies": {
+        "random": "*",
+        "pickle": "*",
+        "subprocess": "*",
+        "gc": "*",
+        "string": "*",
+        "os": "*",
+        "time": "*",
+        "tensorflow": "*",
+        "numpy": "*",
+        "cirq": "*",
+        "matplotlib": "*",
+        "keras_tuner": "*"
+    }
+}
