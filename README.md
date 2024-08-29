@@ -150,4 +150,4 @@ Usage
 7-Evaluate and Visualize: Use cross_val_score_with_cv() and update_graph() for model evaluation and visualization.
 
 
-Thank you.
+Thank you. *Just Corrected no closed comment section, now the code is functionnal.
