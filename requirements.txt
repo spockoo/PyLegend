@@ -1,0 +1,9 @@
+cirq==1.4.1
+keras_tuner==1.4.7
+matplotlib==3.8.4
+numpy==1.22.1
+pandas==2.0.3
+pywin32==306
+scikit_learn==1.5.1
+tensorflow==2.17.0
+tensorflow_intel==2.17.0
